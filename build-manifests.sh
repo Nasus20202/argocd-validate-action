@@ -8,6 +8,12 @@ BASE_PATH=$3
 SKIP_FILES=$4
 HELM_KUBEVERSION=${HELM_KUBEVERSION:-$(kubectl version --client | grep "Client Version:" | cut -d' ' -f3)}
 
+echo "Using manifests directory: $MANIFESTS_DIR"
+echo "Using apps directory: $APPS_DIR"
+echo "Using base path: $BASE_PATH"
+echo "Skipping files matching: $SKIP_FILES"
+echo "Using Helm kube version: $HELM_KUBEVERSION"
+
 # Function to extract version from ArgoCD app manifest
 get_chart_version() {
     local app_file="$1"
@@ -257,6 +263,10 @@ find "$APPS_DIR" \( -name "*.yaml" -o -name "*.yml" \) -type f | while read -r a
             
             # Build helm template command using --repo
             helm_cmd="helm template $release_name $chart_name --version $chart_version --repo $chart_repo --namespace $namespace"
+            
+            if [ -n "$HELM_KUBEVERSION" ]; then
+                helm_cmd="$helm_cmd --kube-version $HELM_KUBEVERSION"
+            fi
             
             if [ -n "$values_args" ]; then
                 helm_cmd="$helm_cmd $values_args"
