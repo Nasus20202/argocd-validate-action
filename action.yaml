@@ -1,0 +1,65 @@
+name: "ArgoCD Build & Validate Manifests"
+description: "Build Kubernetes manifests from ArgoCD application definitions and validate them using kubeconform"
+author: "Nasus20202"
+inputs:
+  manifests-dir:
+    description: "Directory to output generated manifests"
+    required: false
+    default: "manifests"
+  apps-dir:
+    description: "Directory containing ArgoCD application manifests"
+    required: true
+    default: ""
+  base-path:
+    description: "Base path for resolving relative paths in ArgoCD apps"
+    required: true
+    default: ""
+  skip-files:
+    description: "Comma-separated list of files to skip"
+    required: false
+    default: ""
+  skip-resources:
+    description: "Comma-separated list of Kubernetes resources to skip during validation"
+    required: false
+    default: "CustomResourceDefinition"
+  helm-kubeversion:
+    description: "Kubernetes version for Helm (auto-detected if not provided)"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v4
+
+    - name: Set up helm
+      uses: azure/setup-helm@v4
+
+    - name: Run build manifests script
+      shell: bash
+      run: |
+        export HELM_KUBEVERSION="${{ inputs.helm-kubeversion }}"
+        ./build-manifests.sh "${{ inputs.manifests-dir }}" "${{ inputs.apps-dir }}" "${{ inputs.base-path }}" "${{ inputs.skip-files }}"
+
+    - name: Validate Kubernetes manifests
+      shell: bash
+      run: |
+        cmd="docker run --rm -v $(pwd):/workdir -w /workdir ghcr.io/yannh/kubeconform:latest \
+          -summary \
+          -output pretty \
+          -schema-location default \
+          -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+        if [ -n "${{ inputs.skip-resources }}" ]; then
+          cmd="$cmd -skip ${{ inputs.skip-resources }}"
+        fi
+
+        cmd="$cmd ${{ inputs.manifests-dir }}"
+
+        output=$(eval $cmd)
+
+        echo "## Kubeconform Validation Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "$output" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
