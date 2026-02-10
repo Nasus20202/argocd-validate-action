@@ -1,20 +1,33 @@
-# ArgoCD Build Manifests Action
+# ArgoCD Validate Action
 
-This GitHub Action builds Kubernetes manifests from ArgoCD application definitions and validates them. The validation results are added to the job summary.
+This GitHub Action builds, validates, and compares Kubernetes manifests from ArgoCD **Application** and **ApplicationSet** definitions. It supports Helm, Kustomize, and plain directory sources, expands ApplicationSet generators locally, validates both ArgoCD and Kubernetes manifests, and posts diff summaries to PRs.
+
+**External repositories** referenced in `spec.source.repoURL` are automatically cloned and cached. Private repos are accessible when `github-token` is provided.
 
 ## Configuration Options
 
-| Input            | Description                                                                                         | Required | Default                    |
-| ---------------- | --------------------------------------------------------------------------------------------------- | -------- | -------------------------- |
-| `manifests-dir`  | Directory to output generated manifests                                                             | No       | `manifests`                |
-| `apps-dir`       | Directory containing ArgoCD application manifests                                                   | Yes      | -                          |
-| `base-path`      | Base path for resolving relative paths in ArgoCD apps                                               | Yes      | -                          |
-| `skip-files`     | Comma-separated list of files to skip                                                               | No       | ``                         |
-| `skip-resources` | Comma-separated list of Kubernetes resources to skip during validation                              | No       | `CustomResourceDefinition` |
-| `state-dir`      | Directory for storing manifest state for diff comparison. Initialized automatically if empty.       | No       | ``                         |
-| `comment-on-pr`  | Whether to post manifest diff as a PR comment (requires `state-dir` and `github-token` to be set)   | No       | `false`                    |
-| `commit-state`   | Whether to commit the state directory back to the repository after comparison (requires `state-dir` and `github-token` with write permissions) | No       | `false`                    |
-| `github-token`   | GitHub token for posting PR comments                                                                | No       | ``                         |
+| Input              | Description                                                                                      | Required | Default                    |
+| ------------------ | ------------------------------------------------------------------------------------------------ | -------- | -------------------------- |
+| `manifests-dir`    | Directory to output generated manifests                                                          | No       | `manifests`                |
+| `apps-dir`         | Directory containing ArgoCD application manifests                                                | Yes      | -                          |
+| `skip-files`       | Comma-separated list of files to skip                                                            | No       | ``                         |
+| `skip-resources`   | Comma-separated list of Kubernetes resources to skip during validation                           | No       | `CustomResourceDefinition` |
+| `state-dir`        | Directory for storing manifest state for diff comparison. Initialized automatically if empty.    | No       | ``                         |
+| `comment-on-pr`    | Whether to post manifest diff as a PR comment (requires `state-dir` and `github-token`)          | No       | `false`                    |
+| `commit-state`     | Whether to commit the state directory after comparison (requires `state-dir` and `github-token`) | No       | `false`                    |
+| `github-token`     | GitHub token for posting PR comments and committing state                                        | No       | ``                         |
+| `validate-argo`    | Whether to validate ArgoCD manifest definitions before rendering                                 | No       | `true`                     |
+| `kube-version`     | Kubernetes version for `helm template` (e.g. `1.30.0`)                                           | No       | auto-detected              |
+| `schema-locations` | Comma-separated additional `kubeconform` schema locations                                        | No       | ``                         |
+| `verbose`          | Enable verbose/debug output                                                                      | No       | `false`                    |
+
+## Outputs
+
+| Output              | Description                                                 |
+| ------------------- | ----------------------------------------------------------- |
+| `diff-status`       | `initialized`, `changed`, or `unchanged`                    |
+| `diff-summary`      | One-line summary of changes (Added/Removed/Modified counts) |
+| `diff-comment-file` | Path to generated PR comment markdown file (when changed)   |
 
 ## Usage
 
@@ -22,38 +35,28 @@ This GitHub Action builds Kubernetes manifests from ArgoCD application definitio
 
 ```yaml
 - name: Build and validate ArgoCD Manifests
-  uses: nasus20202/argocd-validate-action@main
+  uses: nasus20202/argocd-validate-action@v3
   with:
     apps-dir: "kubernetes/argocd-apps"
-    base-path: "kubernetes"
-    skip-resources: "CustomResourceDefinition"
 ```
 
-### With Manifest Diff and PR Comments
+### With ArgoCD Validation and Manifest Diff
 
 ```yaml
 - name: Build and validate ArgoCD Manifests
-  uses: nasus20202/argocd-validate-action@main
+  uses: nasus20202/argocd-validate-action@v3
   with:
     apps-dir: "kubernetes/argocd-apps"
-    base-path: "kubernetes"
+    validate-argo: "true"
     state-dir: ".argocd-state"
     comment-on-pr: "true"
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-When `state-dir` is set, the action will:
-1. Build and validate manifests as usual.
-2. Compare the newly generated manifests with the previously stored state.
-3. If the state directory is empty or does not exist, initialize it with the current manifests.
-4. Report a summary of changes (added, removed, modified files) in the job summary.
-5. If `comment-on-pr` is `true`, post the diff as a comment on the pull request.
-6. If `commit-state` is `true`, commit and push the updated state directory to the repository so that future runs have something to compare against.
-
 ### With State Commit on Merge
 
 To keep the state directory up-to-date, enable `commit-state` on your main branch after PRs are merged.
-The workflow must have `contents: write` permission and a valid `github-token` for the push to succeed:
+The workflow must have `contents: write` permission:
 
 ```yaml
 on:
@@ -66,16 +69,47 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build, validate, and commit state
-        uses: nasus20202/argocd-validate-action@main
+        uses: nasus20202/argocd-validate-action@v3
         with:
           apps-dir: "kubernetes/argocd-apps"
-          base-path: "kubernetes"
           state-dir: ".argocd-state"
           commit-state: "true"
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The validation results will be displayed in the job summary.
+## How It Works
+
+The action runs an 8-step pipeline:
+
+1. **Validate ArgoCD definitions** — checks Application/ApplicationSet structure for errors
+2. **Discover manifests** — scans the apps directory for ArgoCD resources
+3. **Expand ApplicationSets** — runs generators to produce concrete Applications
+4. **Render manifests** — runs `helm template`, `kustomize build`, or collects directory manifests
+5. **Validate K8s manifests** — runs `kubeconform` against rendered output
+6. **Compare with state** — diffs current output against stored state (if `state-dir` set)
+7. **Post PR comment** — posts diff summary to the PR (if `comment-on-pr` is enabled)
+8. **Commit state** — pushes updated state to the repository (if `commit-state` is enabled)
+
+## Requirements
+
+- Python 3 (available on `ubuntu-latest` runners)
+- `helm` (for Helm sources)
+- `kubectl` or `kustomize` (for Kustomize sources)
+- `kubeconform` (for K8s manifest validation)
+
+## Development
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run tests
+pip install pytest
+pytest tests/ -v
+
+# Run the action locally
+python -m src.main --apps-dir path/to/apps
+```

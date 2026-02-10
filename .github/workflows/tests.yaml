@@ -1,6 +1,8 @@
 name: Tests
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -8,19 +10,22 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run Tests
+  tests:
+    name: Tests
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Setup Bats
-        uses: bats-core/bats-action@4.0.0
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
 
-      - name: Install yq
-        uses: mikefarah/yq@v4
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run tests
-        run: bats tests/
+        run: python -m pytest tests/ -v --tb=short

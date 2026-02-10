@@ -10,10 +10,6 @@ inputs:
     description: "Directory containing ArgoCD application manifests"
     required: true
     default: ""
-  base-path:
-    description: "Base path for resolving relative paths in ArgoCD apps"
-    required: true
-    default: ""
   skip-files:
     description: "Comma-separated list of files to skip"
     required: false
@@ -38,6 +34,32 @@ inputs:
     description: "Whether to commit the state directory back to the repository after comparison (e.g. after merging a PR). Requires github-token with write permissions."
     required: false
     default: "false"
+  validate-argo:
+    description: "Whether to validate ArgoCD application/applicationset definitions before rendering"
+    required: false
+    default: "true"
+  kube-version:
+    description: "Kubernetes version to pass to helm template (e.g. 1.30.0). Auto-detected if not set."
+    required: false
+    default: ""
+  schema-locations:
+    description: "Comma-separated additional kubeconform schema locations for CRD validation"
+    required: false
+    default: ""
+  verbose:
+    description: "Enable verbose debug output"
+    required: false
+    default: "false"
+outputs:
+  diff-status:
+    description: "Diff status: 'initialized', 'changed', or 'unchanged'"
+    value: ${{ steps.compare.outputs.diff-status }}
+  diff-summary:
+    description: "One-line summary of changes (e.g. Added/Removed/Modified counts)"
+    value: ${{ steps.compare.outputs.diff-summary }}
+  diff-comment-file:
+    description: "Path to generated PR comment markdown file (set when status is 'changed')"
+    value: ${{ steps.compare.outputs.diff-comment-file }}
 runs:
   using: "composite"
   steps:
@@ -49,176 +71,66 @@ runs:
 
     - name: Set up Kubeconform
       shell: bash
-      run: |
-        wget https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
-        tar -xzf kubeconform-linux-amd64.tar.gz
-        sudo mv kubeconform /usr/local/bin/
+      run: "${{ github.action_path }}/scripts/setup-kubeconform.sh"
 
-    - name: Run build manifests script
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.14"
+
+    - name: Set up Python dependencies
       shell: bash
-      run: |
-        bash "${{ github.action_path }}/build-manifests.sh" "${{ inputs.manifests-dir }}" "${{ inputs.apps-dir }}" "${{ inputs.base-path }}" "${{ inputs.skip-files }}"
+      run: pip install -q -r "${{ github.action_path }}/requirements.txt"
 
-    - name: Validate Kubernetes manifests
-      shell: bash
-      run: |
-        cmd="kubeconform \
-          -summary \
-          -output text \
-          -schema-location default \
-          -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-        if [ -n "${{ inputs.skip-resources }}" ]; then
-          cmd="$cmd -skip ${{ inputs.skip-resources }}"
-        fi
-        cmd="$cmd ${{ inputs.manifests-dir }}"
-
-        set +e
-        echo "Running command: $cmd"
-        output=$(eval $cmd)
-        exit_code=$?
-        set -e
-
-        echo "## Kubeconform Validation Results" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "$output" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-
-        if [ $exit_code -ne 0 ]; then
-          echo "Kubeconform validation failed."
-          exit $exit_code
-        else
-          echo "Kubeconform validation succeeded."
-        fi
-
-    - name: Compare manifests with state
+    - name: Build, validate, and compare manifests
       id: compare
-      if: ${{ inputs.state-dir != '' }}
       shell: bash
+      env:
+        INPUT_MANIFESTS-DIR: ${{ inputs.manifests-dir }}
+        INPUT_APPS-DIR: ${{ inputs.apps-dir }}
+        INPUT_SKIP-FILES: ${{ inputs.skip-files }}
+        INPUT_SKIP-RESOURCES: ${{ inputs.skip-resources }}
+        INPUT_STATE-DIR: ${{ inputs.state-dir }}
+        INPUT_COMMENT-ON-PR: ${{ inputs.comment-on-pr }}
+        INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
+        INPUT_COMMIT-STATE: ${{ inputs.commit-state }}
+        INPUT_VALIDATE-ARGO: ${{ inputs.validate-argo }}
+        INPUT_KUBE-VERSION: ${{ inputs.kube-version }}
+        INPUT_SCHEMA-LOCATIONS: ${{ inputs.schema-locations }}
+        INPUT_VERBOSE: ${{ inputs.verbose }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
       run: |
-        bash "${{ github.action_path }}/compare-manifests.sh" "${{ inputs.state-dir }}" "${{ inputs.manifests-dir }}"
+        cd "${{ github.workspace }}"
+        PYTHONPATH="${{ github.action_path }}" python -m src.main
 
     - name: Post PR comment
-      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && (steps.compare.outputs.DIFF_STATUS == 'changed' || steps.compare.outputs.DIFF_STATUS == 'unchanged') && github.event_name == 'pull_request' }}
+      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && (steps.compare.outputs.diff-status == 'changed' || steps.compare.outputs.diff-status == 'unchanged') && github.event_name == 'pull_request' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-      run: |
-        if [ -z "$GH_TOKEN" ]; then
-          echo "Warning: github-token is not set. Skipping PR comment."
-          exit 0
-        fi
-
-        PR_NUMBER="${{ github.event.pull_request.number }}"
-        if [ -z "$PR_NUMBER" ]; then
-          echo "Not in a pull request context. Skipping PR comment."
-          exit 0
-        fi
-
-        REPO="${{ github.repository }}"
-        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
-
-        if [ "$STATUS" = "changed" ]; then
-          COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
-          if [ -z "$COMMENT_FILE" ] || [ ! -f "$COMMENT_FILE" ]; then
-            echo "No diff comment file found. Skipping PR comment."
-            exit 0
-          fi
-          COMMENT_BODY=$(cat "$COMMENT_FILE")
-        else
-          COMMENT_BODY="## ArgoCD Manifest Changes
-
-        No changes detected in manifests."
-        fi
-
-        # Check for existing comment to update
-        EXISTING_COMMENT_ID=$(curl -sf -H "Authorization: token $GH_TOKEN" \
-          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" | \
-          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1) || {
-          echo "Warning: Failed to fetch existing PR comments."
-          EXISTING_COMMENT_ID=""
-        }
-
-        if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
-          echo "Updating existing PR comment $EXISTING_COMMENT_ID..."
-          curl -sf -X PATCH \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$REPO/issues/comments/$EXISTING_COMMENT_ID" \
-            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" > /dev/null || {
-            echo "Warning: Failed to update PR comment."
-            exit 0
-          }
-        else
-          echo "Creating new PR comment..."
-          curl -sf -X POST \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
-            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" > /dev/null || {
-            echo "Warning: Failed to create PR comment."
-            exit 0
-          }
-        fi
-
-        echo "PR comment posted successfully."
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DIFF_STATUS: ${{ steps.compare.outputs.diff-status }}
+        DIFF_COMMENT_FILE: ${{ steps.compare.outputs.diff-comment-file }}
+      run: "${{ github.action_path }}/scripts/post-pr-comment.sh"
 
     - name: Add diff to job summary
-      if: ${{ inputs.state-dir != '' && steps.compare.outputs.DIFF_STATUS != '' }}
+      if: ${{ inputs.state-dir != '' && steps.compare.outputs.diff-status != '' }}
       shell: bash
-      run: |
-        echo "" >> $GITHUB_STEP_SUMMARY
-        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
-        SUMMARY="${{ steps.compare.outputs.DIFF_SUMMARY }}"
-
-        if [ "$STATUS" = "changed" ]; then
-          COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
-          if [ -n "$COMMENT_FILE" ] && [ -f "$COMMENT_FILE" ]; then
-            cat "$COMMENT_FILE" >> $GITHUB_STEP_SUMMARY
-          fi
-        elif [ "$STATUS" = "initialized" ]; then
-          echo "## ArgoCD Manifest State" >> $GITHUB_STEP_SUMMARY
-          echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "## ArgoCD Manifest Changes" >> $GITHUB_STEP_SUMMARY
-          echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-        fi
+      env:
+        DIFF_STATUS: ${{ steps.compare.outputs.diff-status }}
+        DIFF_SUMMARY: ${{ steps.compare.outputs.diff-summary }}
+        DIFF_COMMENT_FILE: ${{ steps.compare.outputs.diff-comment-file }}
+      run: "${{ github.action_path }}/scripts/job-summary.sh"
 
     - name: Commit state to repository
-      if: ${{ inputs.state-dir != '' && inputs.commit-state == 'true' && steps.compare.outputs.DIFF_STATUS != '' }}
+      if: ${{ inputs.state-dir != '' && inputs.commit-state == 'true' && steps.compare.outputs.diff-status != '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-      run: |
-        if [ -z "$GH_TOKEN" ]; then
-          echo "Warning: github-token is not set. Skipping state commit."
-          exit 0
-        fi
-
-        STATE_DIR="${{ inputs.state-dir }}"
-        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
-
-        if [ ! -d "$STATE_DIR" ]; then
-          echo "State directory does not exist. Skipping commit."
-          exit 0
-        fi
-
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add "$STATE_DIR"
-
-        if git diff --cached --quiet; then
-          echo "No changes to commit in state directory."
-          exit 0
-        fi
-
-        if [ "$STATUS" = "initialized" ]; then
-          git commit -m "chore: initialize ArgoCD manifest state"
-        else
-          git commit -m "chore: update ArgoCD manifest state"
-        fi
-
-        git push || {
-          echo "Error: Failed to push state changes. Ensure the github-token has write permissions and the workflow has 'contents: write' permission."
-          exit 1
-        }
-        echo "State committed and pushed to repository."
+        STATE_DIR: ${{ inputs.state-dir }}
+        DIFF_STATUS: ${{ steps.compare.outputs.diff-status }}
+      run: "${{ github.action_path }}/scripts/commit-state.sh"
