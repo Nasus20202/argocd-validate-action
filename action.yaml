@@ -34,6 +34,10 @@ inputs:
     description: "GitHub token for posting PR comments (defaults to github.token)"
     required: false
     default: ""
+  commit-state:
+    description: "Whether to commit the state directory back to the repository after comparison (e.g. after merging a PR). Requires github-token with write permissions."
+    required: false
+    default: "false"
 runs:
   using: "composite"
   steps:
@@ -178,3 +182,43 @@ runs:
           echo "## ArgoCD Manifest Changes" >> $GITHUB_STEP_SUMMARY
           echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
         fi
+
+    - name: Commit state to repository
+      if: ${{ inputs.state-dir != '' && inputs.commit-state == 'true' && steps.compare.outputs.DIFF_STATUS != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "Warning: github-token is not set. Skipping state commit."
+          exit 0
+        fi
+
+        STATE_DIR="${{ inputs.state-dir }}"
+        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
+
+        if [ ! -d "$STATE_DIR" ]; then
+          echo "State directory does not exist. Skipping commit."
+          exit 0
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "$STATE_DIR"
+
+        if git diff --cached --quiet; then
+          echo "No changes to commit in state directory."
+          exit 0
+        fi
+
+        if [ "$STATUS" = "initialized" ]; then
+          git commit -m "chore: initialize ArgoCD manifest state"
+        else
+          git commit -m "chore: update ArgoCD manifest state"
+        fi
+
+        git push || {
+          echo "Error: Failed to push state changes. Ensure the github-token has write permissions and the workflow has 'contents: write' permission."
+          exit 1
+        }
+        echo "State committed and pushed to repository."
