@@ -47,13 +47,6 @@ runs:
     - name: Set up Helm
       uses: azure/setup-helm@v4
 
-    - name: Set up Kubeconform
-      shell: bash
-      run: |
-        wget https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
-        tar -xzf kubeconform-linux-amd64.tar.gz
-        sudo mv kubeconform /usr/local/bin/
-
     - name: Run build manifests script
       shell: bash
       run: |
@@ -62,19 +55,19 @@ runs:
     - name: Validate Kubernetes manifests
       shell: bash
       run: |
-        cmd="kubeconform \
-          -summary \
-          -output text \
-          -schema-location default \
-          -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+        # Build kubeconform arguments
+        args="-summary -output text -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
         if [ -n "${{ inputs.skip-resources }}" ]; then
-          cmd="$cmd -skip ${{ inputs.skip-resources }}"
+          args="$args -skip ${{ inputs.skip-resources }}"
         fi
-        cmd="$cmd ${{ inputs.manifests-dir }}"
 
+        # Convert manifests directory to absolute path for Docker volume mount
+        manifests_abs_path=$(cd "${{ inputs.manifests-dir }}" && pwd)
+
+        # Run kubeconform via Docker
         set +e
-        echo "Running command: $cmd"
-        output=$(eval $cmd)
+        echo "Running kubeconform via Docker on: $manifests_abs_path"
+        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:latest $args /manifests)
         exit_code=$?
         set -e
 
