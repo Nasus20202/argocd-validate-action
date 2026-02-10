@@ -1,5 +1,7 @@
 name: Release
 
+run-name: "Release ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.version }}"
+
 on:
   release:
     types: [published]
