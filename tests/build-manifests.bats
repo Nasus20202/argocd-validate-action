@@ -370,6 +370,106 @@ EOF
     [ -f "$MANIFESTS_DIR/env-staging/config.yaml" ]
 }
 
+@test "processes ApplicationSet with BASE_PATH relative paths" {
+    # Create directory structure under BASE_PATH
+    mkdir -p "$BASE_PATH/apps/bots/bot1"
+    mkdir -p "$BASE_PATH/apps/bots/bot2"
+    echo "kind: Deployment" > "$BASE_PATH/apps/bots/bot1/deployment.yaml"
+    echo "kind: Service" > "$BASE_PATH/apps/bots/bot2/service.yaml"
+
+    cat > "$APPS_DIR/appset.yaml" <<'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: bots
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/example/repo.git
+        revision: main
+        directories:
+          - path: apps/bots/*
+  template:
+    metadata:
+      name: "bots-{{path.basename}}"
+    spec:
+      source:
+        repoURL: https://github.com/example/repo.git
+        targetRevision: main
+        path: "{{path}}"
+      destination:
+        namespace: bots
+EOF
+
+    export HELM_KUBEVERSION="1.30.0"
+    run bash "$BUILD_SCRIPT" "$MANIFESTS_DIR" "$APPS_DIR" "$BASE_PATH" ""
+
+    [ "$status" -eq 0 ]
+    [ -d "$MANIFESTS_DIR/bots-bot1" ]
+    [ -d "$MANIFESTS_DIR/bots-bot2" ]
+    [ -f "$MANIFESTS_DIR/bots-bot1/deployment.yaml" ]
+    [ -f "$MANIFESTS_DIR/bots-bot2/service.yaml" ]
+}
+
+@test "processes ApplicationSet with kustomize templates" {
+    # Create kustomize directory structure
+    local envs_dir="$TEST_DIR/appset_kustomize"
+    mkdir -p "$envs_dir/app1"
+    cat > "$envs_dir/app1/kustomization.yaml" <<'EOF'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+EOF
+    cat > "$envs_dir/app1/deployment.yaml" <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      containers:
+        - name: test
+          image: nginx
+EOF
+
+    cat > "$APPS_DIR/appset.yaml" <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: kustomize-appset
+spec:
+  generators:
+    - git:
+        directories:
+          - path: $envs_dir
+  template:
+    metadata:
+      name: kust-{{path.basename}}
+    spec:
+      source:
+        path: "{{path}}"
+      destination:
+        namespace: default
+EOF
+
+    export HELM_KUBEVERSION="1.30.0"
+    run bash "$BUILD_SCRIPT" "$MANIFESTS_DIR" "$APPS_DIR" "$BASE_PATH" ""
+
+    [ "$status" -eq 0 ]
+    [ -d "$MANIFESTS_DIR/kust-app1" ]
+    [ -f "$MANIFESTS_DIR/kust-app1/manifests.yaml" ]
+}
+
 @test "handles empty apps directory gracefully" {
     export HELM_KUBEVERSION="1.30.0"
     run bash "$BUILD_SCRIPT" "$MANIFESTS_DIR" "$APPS_DIR" "$BASE_PATH" ""

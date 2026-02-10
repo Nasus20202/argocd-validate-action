@@ -222,17 +222,111 @@ find "$APPS_DIR" \( -name "*.yaml" -o -name "*.yml" \) -type f | while read -r a
         
         for gen_path in $generator_paths; do
             # Remove /* from gen_path to get base_path
-            base_path=$(echo "$gen_path" | sed 's|/\*$||')
-            for dir in $base_path/*/; do
+            gen_base=$(echo "$gen_path" | sed 's|/\*$||')
+            # Apply BASE_PATH if set and the path doesn't start with it
+            local_gen_base="$gen_base"
+            if [[ -n "$BASE_PATH" && "$local_gen_base" != "$BASE_PATH"* && "$local_gen_base" != /* ]]; then
+                local_gen_base="$BASE_PATH/$local_gen_base"
+            fi
+            for dir in "$local_gen_base"/*/; do
                 [ -d "$dir" ] || continue
                 dirname=$(basename "$dir")
-                path="$base_path/$dirname"
-                # Replace {{path.basename}} in name_template
-                temp_app_name=$(echo "$name_template" | sed "s|{{path.basename}}|$dirname|g")
+                path="$gen_base/$dirname"
+                # Replace {{path.basename}} and {{path}} in name_template
+                temp_app_name=$(echo "$name_template" | sed "s|{{path.basename}}|$dirname|g" | sed "s|{{path}}|$path|g")
                 echo "Processing ApplicationSet generated app: $temp_app_name"
-                output_dir="$MANIFESTS_DIR/$temp_app_name"
-                mkdir -p "$output_dir"
-                find "$path" \( -name "*.yaml" -o -name "*.yml" \) -exec cp {} "$output_dir/" \;
+                
+                # Create a temporary app manifest from the template with substituted values
+                temp_app_file=$(mktemp)
+                yq eval '.spec.template' "$app_file" > "$temp_app_file"
+                # Substitute template variables in the temp file
+                sed -i "s|{{path.basename}}|$dirname|g" "$temp_app_file"
+                sed -i "s|{{path}}|$path|g" "$temp_app_file"
+                
+                # Check if the template has a chart-based source
+                temp_chart_name=$(get_chart_name "$temp_app_file" 2>/dev/null)
+                
+                if [ -n "$temp_chart_name" ]; then
+                    # Process as Helm chart
+                    release_name=$(get_release_name "$temp_app_file")
+                    chart_version=$(get_chart_version "$temp_app_file")
+                    chart_repo=$(get_chart_repo "$temp_app_file")
+                    namespace=$(get_namespace "$temp_app_file")
+                    values_args=$(get_values_files "$temp_app_file")
+                    helm_params=$(get_helm_parameters "$temp_app_file")
+                    
+                    echo "Generating Helm manifests for ApplicationSet app: $temp_app_name (chart: $temp_chart_name)"
+                    
+                    helm_cmd="helm template $release_name $temp_chart_name --version $chart_version --repo $chart_repo --namespace $namespace"
+                    
+                    if [ -n "$HELM_KUBEVERSION" ]; then
+                        helm_cmd="$helm_cmd --kube-version $HELM_KUBEVERSION"
+                    fi
+                    if [ -n "$values_args" ]; then
+                        helm_cmd="$helm_cmd $values_args"
+                    fi
+                    if [ -n "$helm_params" ]; then
+                        helm_cmd="$helm_cmd $helm_params"
+                    fi
+                    helm_cmd="$helm_cmd --output-dir $(pwd)/$MANIFESTS_DIR"
+                    
+                    echo "Executing: $helm_cmd"
+                    (
+                        cd /tmp
+                        eval "$helm_cmd"
+                    ) || {
+                        echo "Error: Failed to generate Helm manifests for $temp_app_name"
+                        rm -f "$temp_app_file"
+                        exit 1
+                    }
+                else
+                    # Process as path-based application
+                    temp_paths=$(get_path_sources "$temp_app_file")
+                    output_dir="$MANIFESTS_DIR/$temp_app_name"
+                    mkdir -p "$output_dir"
+                    
+                    if [ -n "$temp_paths" ]; then
+                        for p in $temp_paths; do
+                            if [ ! -d "$p" ]; then
+                                continue
+                            fi
+                            # Check for kustomize
+                            if [ -f "$p/kustomization.yaml" ] || [ -f "$p/kustomization.yml" ] || [ -f "$p/kustomize.yaml" ] || [ -f "$p/kustomize.yml" ]; then
+                                echo "  Generating kustomize manifests from: $p"
+                                kubectl kustomize "$p" --output "$output_dir/manifests.yaml" || {
+                                    echo "Error: Failed to generate kustomize manifests from $p"
+                                    rm -f "$temp_app_file"
+                                    exit 1
+                                }
+                            else
+                                echo "  Copying manifests from: $p"
+                                find "$p" \( -name "*.yaml" -o -name "*.yml" \) -exec cp {} "$output_dir/" \;
+                            fi
+                        done
+                    else
+                        # Fallback: copy manifests from the generated path directly
+                        local_path="$path"
+                        if [[ -n "$BASE_PATH" && "$local_path" != "$BASE_PATH"* && "$local_path" != /* ]]; then
+                            local_path="$BASE_PATH/$local_path"
+                        fi
+                        if [ -d "$local_path" ]; then
+                            # Check for kustomize
+                            if [ -f "$local_path/kustomization.yaml" ] || [ -f "$local_path/kustomization.yml" ] || [ -f "$local_path/kustomize.yaml" ] || [ -f "$local_path/kustomize.yml" ]; then
+                                echo "  Generating kustomize manifests from: $local_path"
+                                kubectl kustomize "$local_path" --output "$output_dir/manifests.yaml" || {
+                                    echo "Error: Failed to generate kustomize manifests from $local_path"
+                                    rm -f "$temp_app_file"
+                                    exit 1
+                                }
+                            else
+                                echo "  Copying manifests from: $local_path"
+                                find "$local_path" \( -name "*.yaml" -o -name "*.yml" \) -exec cp {} "$output_dir/" \;
+                            fi
+                        fi
+                    fi
+                fi
+                
+                rm -f "$temp_app_file"
             done
         done
     else
