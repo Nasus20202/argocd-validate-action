@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Fetch all history for all tags and branches
 
       - name: Determine version
         id: version
@@ -65,12 +67,49 @@ jobs:
 
           echo "Updated version tags: $VERSION, $MINOR, $MAJOR -> $(git rev-parse HEAD)"
 
+      - name: Generate release notes
+        if: github.event_name == 'workflow_dispatch'
+        id: release_notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Find the previous version tag (excluding major/minor tags, only full semver)
+          PREVIOUS_VERSION=$(git tag -l --sort=-version:refname 'v[0-9]*.[0-9]*.[0-9]*' | grep -v "^${VERSION}$" | head -n 1)
+          
+          if [ -z "$PREVIOUS_VERSION" ]; then
+            echo "No previous version found, this is the first release"
+            COMMIT_RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
+          else
+            echo "Previous version: $PREVIOUS_VERSION"
+            COMMIT_RANGE="${PREVIOUS_VERSION}..HEAD"
+          fi
+          
+          # Generate release notes with commits since previous version
+          NOTES_FILE=$(mktemp)
+          echo "## What's Changed" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          
+          # Get commits with conventional commit formatting
+          git log "$COMMIT_RANGE" --pretty=format:"* %s (%h)" --no-merges >> "$NOTES_FILE"
+          
+          if [ -n "$PREVIOUS_VERSION" ]; then
+            echo "" >> "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_VERSION}...${VERSION}" >> "$NOTES_FILE"
+          fi
+          
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          
+          echo "Release notes:"
+          cat "$NOTES_FILE"
+
       - name: Create GitHub Release
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          NOTES_FILE="${{ steps.release_notes.outputs.notes_file }}"
           
           # Check if release already exists
           if gh release view "$VERSION" &>/dev/null; then
@@ -79,5 +118,5 @@ jobs:
             echo "Creating GitHub release for $VERSION"
             gh release create "$VERSION" \
               --title "$VERSION" \
-              --generate-notes
+              --notes-file "$NOTES_FILE"
           fi
