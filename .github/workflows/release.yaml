@@ -37,8 +37,10 @@ jobs:
           fi
 
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f1-2)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "minor=$MINOR" >> "$GITHUB_OUTPUT"
 
       - name: Push version tags
         run: |
@@ -47,9 +49,18 @@ jobs:
 
           VERSION="${{ steps.version.outputs.version }}"
           MAJOR="${{ steps.version.outputs.major }}"
+          MINOR="${{ steps.version.outputs.minor }}"
+
+          # Create or update the full version tag (e.g. v1.0.0)
+          git tag -f "$VERSION" HEAD
+          git push origin "$VERSION" --force
+
+          # Create or update the minor version tag (e.g. v1.0)
+          git tag -f "$MINOR" HEAD
+          git push origin "$MINOR" --force
 
           # Create or update the major version tag (e.g. v1)
           git tag -f "$MAJOR" HEAD
           git push origin "$MAJOR" --force
 
-          echo "Updated major version tag: $MAJOR -> $(git rev-parse HEAD)"
+          echo "Updated version tags: $VERSION, $MINOR, $MAJOR -> $(git rev-parse HEAD)"
