@@ -55,10 +55,17 @@ runs:
     - name: Validate Kubernetes manifests with Kubeconform
       shell: bash
       run: |
-        # Build kubeconform arguments
-        args="-summary -output text -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+        # Build kubeconform arguments as an array
+        kubeconform_args=(
+          "-summary"
+          "-output" "text"
+          "-schema-location" "default"
+          "-schema-location" "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+        )
+        
+        # Add skip-resources if provided
         if [ -n "${{ inputs.skip-resources }}" ]; then
-          args="$args -skip ${{ inputs.skip-resources }}"
+          kubeconform_args+=("-skip" "${{ inputs.skip-resources }}")
         fi
         
         # Convert manifests directory to absolute path for Docker volume mount
@@ -71,7 +78,7 @@ runs:
         # Run kubeconform via Docker
         set +e
         echo "Running kubeconform via Docker (ghcr.io/yannh/kubeconform:v0.7.0)..."
-        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:v0.7.0 $args /manifests 2>&1)
+        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:v0.7.0 "${kubeconform_args[@]}" /manifests 2>&1)
         exit_code=$?
         set -e
         
