@@ -38,6 +38,11 @@ on:
         required: false
         default: "CustomResourceDefinition,Alloy,Plan,HelmChartConfig"
         type: string
+      state_dir:
+        description: "Directory for storing manifest state for diff comparison"
+        required: false
+        default: ""
+        type: string
 jobs:
   debug:
     name: Debug ArgoCD Build Manifests Action
@@ -63,3 +68,4 @@ jobs:
           base-path: ${{ inputs.base_path }}
           skip-files: ${{ inputs.skip_files }}
           skip-resources: ${{ inputs.skip_resources }}
+          state-dir: ${{ inputs.state_dir }}
