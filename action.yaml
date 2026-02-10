@@ -62,12 +62,16 @@ runs:
         fi
 
         # Convert manifests directory to absolute path for Docker volume mount
+        if [ ! -d "${{ inputs.manifests-dir }}" ]; then
+          echo "Error: Manifests directory '${{ inputs.manifests-dir }}' does not exist."
+          exit 1
+        fi
         manifests_abs_path=$(cd "${{ inputs.manifests-dir }}" && pwd)
 
         # Run kubeconform via Docker
         set +e
         echo "Running kubeconform via Docker on: $manifests_abs_path"
-        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:latest $args /manifests)
+        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:v0.7.0 $args /manifests)
         exit_code=$?
         set -e
 
