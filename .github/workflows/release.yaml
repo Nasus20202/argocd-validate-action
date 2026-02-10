@@ -78,10 +78,21 @@ jobs:
           
           if [ -z "$PREVIOUS_VERSION" ]; then
             echo "No previous version found, this is the first release"
-            COMMIT_RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
+            FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+            if [ -z "$FIRST_COMMIT" ]; then
+              echo "Error: Could not find first commit"
+              exit 1
+            fi
+            COMMIT_RANGE="${FIRST_COMMIT}..HEAD"
           else
             echo "Previous version: $PREVIOUS_VERSION"
             COMMIT_RANGE="${PREVIOUS_VERSION}..HEAD"
+          fi
+          
+          # Verify the commit range is valid
+          if ! git rev-parse "$COMMIT_RANGE" &>/dev/null; then
+            echo "Error: Invalid commit range: $COMMIT_RANGE"
+            exit 1
           fi
           
           # Generate release notes with commits since previous version
