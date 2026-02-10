@@ -16,7 +16,17 @@ The workflow will:
 - Create and push the version tag (e.g., `v1.0.0`)
 - Create and push the minor version tag (e.g., `v1.0`)
 - Create and push the major version tag (e.g., `v1`)
-- Create a GitHub release with auto-generated release notes
+- Generate release notes with a list of commits since the previous version
+- Create a GitHub release with the generated release notes
+
+## Release Notes
+
+The release notes are automatically generated and include:
+- A list of all commits since the previous version (e.g., `v1.0.0` to `v1.1.0`)
+- Each commit is shown with its message and short hash
+- A link to the full changelog comparing the previous version to the new version
+
+For the first release (when no previous version exists), all commits from the repository's first commit to HEAD are included.
 
 ## Version Tags
 
