@@ -93,20 +93,14 @@ runs:
       run: |
         bash "${{ github.action_path }}/compare-manifests.sh" "${{ inputs.state-dir }}" "${{ inputs.manifests-dir }}"
 
-    - name: Post PR comment with manifest diff
-      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && steps.compare.outputs.DIFF_STATUS == 'changed' && github.event_name == 'pull_request' }}
+    - name: Post PR comment
+      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && (steps.compare.outputs.DIFF_STATUS == 'changed' || steps.compare.outputs.DIFF_STATUS == 'unchanged') && github.event_name == 'pull_request' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         if [ -z "$GH_TOKEN" ]; then
           echo "Warning: github-token is not set. Skipping PR comment."
-          exit 0
-        fi
-
-        COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
-        if [ -z "$COMMENT_FILE" ] || [ ! -f "$COMMENT_FILE" ]; then
-          echo "No diff comment file found. Skipping PR comment."
           exit 0
         fi
 
@@ -117,69 +111,49 @@ runs:
         fi
 
         REPO="${{ github.repository }}"
-        COMMENT_BODY=$(cat "$COMMENT_FILE")
+        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
+
+        if [ "$STATUS" = "changed" ]; then
+          COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
+          if [ -z "$COMMENT_FILE" ] || [ ! -f "$COMMENT_FILE" ]; then
+            echo "No diff comment file found. Skipping PR comment."
+            exit 0
+          fi
+          COMMENT_BODY=$(cat "$COMMENT_FILE")
+        else
+          COMMENT_BODY="## ArgoCD Manifest Changes
+
+        No changes detected in manifests."
+        fi
 
         # Check for existing comment to update
-        EXISTING_COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
-          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" | \
-          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1)
+        EXISTING_COMMENT_ID=$(curl -sf -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" | \
+          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1) || {
+          echo "Warning: Failed to fetch existing PR comments."
+          EXISTING_COMMENT_ID=""
+        }
 
         if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
           echo "Updating existing PR comment $EXISTING_COMMENT_ID..."
-          curl -s -X PATCH \
+          curl -sf -X PATCH \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
             "https://api.github.com/repos/$REPO/issues/comments/$EXISTING_COMMENT_ID" \
-            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')"
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" > /dev/null || {
+            echo "Warning: Failed to update PR comment."
+            exit 0
+          }
         else
           echo "Creating new PR comment..."
-          curl -s -X POST \
+          curl -sf -X POST \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
             "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
-            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')"
-        fi
-
-        echo "PR comment posted successfully."
-
-    - name: Post PR comment (no changes)
-      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && steps.compare.outputs.DIFF_STATUS == 'unchanged' && github.event_name == 'pull_request' }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-      run: |
-        if [ -z "$GH_TOKEN" ]; then
-          echo "Warning: github-token is not set. Skipping PR comment."
-          exit 0
-        fi
-
-        PR_NUMBER="${{ github.event.pull_request.number }}"
-        if [ -z "$PR_NUMBER" ]; then
-          echo "Not in a pull request context. Skipping PR comment."
-          exit 0
-        fi
-
-        REPO="${{ github.repository }}"
-        COMMENT_BODY="## ArgoCD Manifest Changes\n\nNo changes detected in manifests."
-
-        EXISTING_COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
-          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" | \
-          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1)
-
-        if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
-          echo "Updating existing PR comment $EXISTING_COMMENT_ID..."
-          curl -s -X PATCH \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$REPO/issues/comments/$EXISTING_COMMENT_ID" \
-            -d "$(jq -n --arg body "$(echo -e "$COMMENT_BODY")" '{body: $body}')"
-        else
-          echo "Creating new PR comment..."
-          curl -s -X POST \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
-            -d "$(jq -n --arg body "$(echo -e "$COMMENT_BODY")" '{body: $body}')"
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" > /dev/null || {
+            echo "Warning: Failed to create PR comment."
+            exit 0
+          }
         fi
 
         echo "PR comment posted successfully."

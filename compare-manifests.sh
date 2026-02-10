@@ -14,6 +14,15 @@ if [ ! -d "$MANIFESTS_DIR" ]; then
     exit 1
 fi
 
+# Validate state directory path to prevent accidental deletion of critical paths
+if [ -n "$STATE_DIR" ]; then
+    resolved=$(cd "$(dirname "$STATE_DIR")" 2>/dev/null && pwd)/$(basename "$STATE_DIR")
+    if [ "$resolved" = "/" ] || [ "$resolved" = "/home" ] || [ "$resolved" = "/etc" ] || [ "$resolved" = "/usr" ]; then
+        echo "Error: STATE_DIR resolves to a critical system path: $resolved"
+        exit 1
+    fi
+fi
+
 # If state directory does not exist or is empty, initialize it
 if [ ! -d "$STATE_DIR" ] || [ -z "$(ls -A "$STATE_DIR" 2>/dev/null)" ]; then
     echo "State directory is empty or does not exist. Initializing with current manifests..."
@@ -50,7 +59,7 @@ SUMMARY="$SUMMARY| Added | $ADDED_FILES |\n"
 SUMMARY="$SUMMARY| Removed | $REMOVED_FILES |\n"
 SUMMARY="$SUMMARY| Modified | $MODIFIED_FILES |\n"
 
-# Build detailed diff (truncate if too large for GitHub)
+# GitHub PR comment body limit is 65536 characters; use 60000 to leave room for markdown formatting
 MAX_DIFF_LENGTH=60000
 DIFF_LENGTH=${#DIFF_OUTPUT}
 
