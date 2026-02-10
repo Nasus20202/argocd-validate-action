@@ -48,9 +48,20 @@ echo "Changes detected between state and new manifests."
 echo "DIFF_STATUS=changed" >> "$GITHUB_OUTPUT"
 
 # Count additions, deletions, and modified files
-ADDED_FILES=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Only in $MANIFESTS_DIR" | wc -l || echo "0")
-REMOVED_FILES=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Only in $STATE_DIR" | wc -l || echo "0")
-MODIFIED_FILES=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Files .* differ$" | wc -l || echo "0")
+# Use || true to handle grep returning non-zero when no matches found
+ADDED_COUNT=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Only in $MANIFESTS_DIR" | wc -l || true)
+REMOVED_COUNT=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Only in $STATE_DIR" | wc -l || true)
+MODIFIED_COUNT=$(diff -r -q "$STATE_DIR" "$MANIFESTS_DIR" 2>/dev/null | grep "^Files .* differ$" | wc -l || true)
+
+# Trim whitespace and ensure numeric values
+ADDED_FILES=$(echo "$ADDED_COUNT" | tr -d ' \n')
+REMOVED_FILES=$(echo "$REMOVED_COUNT" | tr -d ' \n')
+MODIFIED_FILES=$(echo "$MODIFIED_COUNT" | tr -d ' \n')
+
+# Default to 0 if empty
+ADDED_FILES=${ADDED_FILES:-0}
+REMOVED_FILES=${REMOVED_FILES:-0}
+MODIFIED_FILES=${MODIFIED_FILES:-0}
 
 # Build summary
 SUMMARY="### Manifest Changes Summary\n"
@@ -78,7 +89,11 @@ echo -e "$FULL_COMMENT" > "$COMMENT_FILE"
 echo "DIFF_COMMENT_FILE=$COMMENT_FILE" >> "$GITHUB_OUTPUT"
 
 # Also write a short summary
-echo -e "DIFF_SUMMARY=Added: $ADDED_FILES, Removed: $REMOVED_FILES, Modified: $MODIFIED_FILES" >> "$GITHUB_OUTPUT"
+{
+  echo "DIFF_SUMMARY<<EOF"
+  echo "Added: $ADDED_FILES, Removed: $REMOVED_FILES, Modified: $MODIFIED_FILES"
+  echo "EOF"
+} >> "$GITHUB_OUTPUT"
 
 # Update state directory with new manifests
 rm -rf "${STATE_DIR:?}"/*
