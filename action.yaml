@@ -71,7 +71,7 @@ runs:
         # Run kubeconform via Docker
         set +e
         echo "Running kubeconform via Docker (ghcr.io/yannh/kubeconform:v0.7.0)..."
-        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:v0.7.0 $args /manifests)
+        output=$(docker run --rm -v "$manifests_abs_path:/manifests:ro" ghcr.io/yannh/kubeconform:v0.7.0 $args /manifests 2>&1)
         exit_code=$?
         set -e
         
