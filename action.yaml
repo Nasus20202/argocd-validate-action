@@ -22,6 +22,18 @@ inputs:
     description: "Comma-separated list of Kubernetes resources to skip during validation"
     required: false
     default: "CustomResourceDefinition"
+  state-dir:
+    description: "Directory for storing manifest state for diff comparison. If empty or non-existent, it will be initialized with current manifests."
+    required: false
+    default: ""
+  comment-on-pr:
+    description: "Whether to post manifest diff as a PR comment (requires state-dir to be set)"
+    required: false
+    default: "false"
+  github-token:
+    description: "GitHub token for posting PR comments (defaults to github.token)"
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -72,4 +84,123 @@ runs:
           exit $exit_code
         else
           echo "Kubeconform validation succeeded."
+        fi
+
+    - name: Compare manifests with state
+      id: compare
+      if: ${{ inputs.state-dir != '' }}
+      shell: bash
+      run: |
+        bash "${{ github.action_path }}/compare-manifests.sh" "${{ inputs.state-dir }}" "${{ inputs.manifests-dir }}"
+
+    - name: Post PR comment with manifest diff
+      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && steps.compare.outputs.DIFF_STATUS == 'changed' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "Warning: github-token is not set. Skipping PR comment."
+          exit 0
+        fi
+
+        COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
+        if [ -z "$COMMENT_FILE" ] || [ ! -f "$COMMENT_FILE" ]; then
+          echo "No diff comment file found. Skipping PR comment."
+          exit 0
+        fi
+
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        if [ -z "$PR_NUMBER" ]; then
+          echo "Not in a pull request context. Skipping PR comment."
+          exit 0
+        fi
+
+        REPO="${{ github.repository }}"
+        COMMENT_BODY=$(cat "$COMMENT_FILE")
+
+        # Check for existing comment to update
+        EXISTING_COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" | \
+          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1)
+
+        if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+          echo "Updating existing PR comment $EXISTING_COMMENT_ID..."
+          curl -s -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/issues/comments/$EXISTING_COMMENT_ID" \
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')"
+        else
+          echo "Creating new PR comment..."
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')"
+        fi
+
+        echo "PR comment posted successfully."
+
+    - name: Post PR comment (no changes)
+      if: ${{ inputs.state-dir != '' && inputs.comment-on-pr == 'true' && steps.compare.outputs.DIFF_STATUS == 'unchanged' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "Warning: github-token is not set. Skipping PR comment."
+          exit 0
+        fi
+
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        if [ -z "$PR_NUMBER" ]; then
+          echo "Not in a pull request context. Skipping PR comment."
+          exit 0
+        fi
+
+        REPO="${{ github.repository }}"
+        COMMENT_BODY="## ArgoCD Manifest Changes\n\nNo changes detected in manifests."
+
+        EXISTING_COMMENT_ID=$(curl -s -H "Authorization: token $GH_TOKEN" \
+          "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" | \
+          jq -r '.[] | select(.body | startswith("## ArgoCD Manifest Changes")) | .id' | head -1)
+
+        if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+          echo "Updating existing PR comment $EXISTING_COMMENT_ID..."
+          curl -s -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/issues/comments/$EXISTING_COMMENT_ID" \
+            -d "$(jq -n --arg body "$(echo -e "$COMMENT_BODY")" '{body: $body}')"
+        else
+          echo "Creating new PR comment..."
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
+            -d "$(jq -n --arg body "$(echo -e "$COMMENT_BODY")" '{body: $body}')"
+        fi
+
+        echo "PR comment posted successfully."
+
+    - name: Add diff to job summary
+      if: ${{ inputs.state-dir != '' && steps.compare.outputs.DIFF_STATUS != '' }}
+      shell: bash
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        STATUS="${{ steps.compare.outputs.DIFF_STATUS }}"
+        SUMMARY="${{ steps.compare.outputs.DIFF_SUMMARY }}"
+
+        if [ "$STATUS" = "changed" ]; then
+          COMMENT_FILE="${{ steps.compare.outputs.DIFF_COMMENT_FILE }}"
+          if [ -n "$COMMENT_FILE" ] && [ -f "$COMMENT_FILE" ]; then
+            cat "$COMMENT_FILE" >> $GITHUB_STEP_SUMMARY
+          fi
+        elif [ "$STATUS" = "initialized" ]; then
+          echo "## ArgoCD Manifest State" >> $GITHUB_STEP_SUMMARY
+          echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "## ArgoCD Manifest Changes" >> $GITHUB_STEP_SUMMARY
+          echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
         fi
