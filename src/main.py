@@ -246,19 +246,6 @@ def main(argv: list[str] | None = None) -> int:
         diff_summary = compare_manifests(state_dir, manifests_dir)
         write_github_outputs(diff_summary)
 
-        # Write to step summary
-        if diff_summary.status == "changed":
-            write_step_summary(diff_summary.comment_body)
-        elif diff_summary.status == "initialized":
-            write_step_summary("## ArgoCD Manifest State\n")
-            write_step_summary(
-                "State directory initialized with current manifests. "
-                "No previous state to compare against.\n"
-            )
-        else:
-            write_step_summary("## ArgoCD Manifest Changes\n")
-            write_step_summary("No changes detected in manifests.\n")
-
     # ── Step 7: Post PR comment ──
     if (
         diff_summary
