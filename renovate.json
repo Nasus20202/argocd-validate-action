@@ -12,7 +12,7 @@
       "customType": "regex",
       "fileMatch": ["^action\\.yaml$"],
       "matchStrings": [
-        "uses: azure/setup-kubectl@v4\\s+with:\\s+version: \"v(?<currentValue>.+?)\""
+        "uses: azure/setup-kubectl@[^\\s]+\\s+with:\\s+version: \"v(?<currentValue>.+?)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "kubernetes/kubernetes",
@@ -22,7 +22,7 @@
       "customType": "regex",
       "fileMatch": ["^action\\.yaml$"],
       "matchStrings": [
-        "uses: azure/setup-helm@v4\\s+with:\\s+version: \"v(?<currentValue>.+?)\""
+        "uses: azure/setup-helm@[^\\s]+\\s+with:\\s+version: \"v(?<currentValue>.+?)\""
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "helm/helm",
