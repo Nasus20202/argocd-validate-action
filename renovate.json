@@ -16,6 +16,7 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "kubernetes/kubernetes",
+      "extractVersionTemplate": "^v(?<version>.+)$",
       "versioningTemplate": "loose"
     },
     {
@@ -26,6 +27,7 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "helm/helm",
+      "extractVersionTemplate": "^v(?<version>.+)$",
       "versioningTemplate": "loose"
     }
   ]
