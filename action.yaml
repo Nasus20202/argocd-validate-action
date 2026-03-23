@@ -69,7 +69,7 @@ runs:
         version: "v1.35.3"
 
     - name: Set up Helm
-      uses: azure/setup-helm@v4
+      uses: azure/setup-helm@v5
       with:
         version: "v4.1.3"
 
