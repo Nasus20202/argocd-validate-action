@@ -217,6 +217,42 @@ class TestCommitState:
         assert commit_state(state, "token", "changed", ["../outside.yaml"]) is True
         assert sibling.exists()
 
+    @patch("src.github._run_git")
+    @patch("src.github.subprocess.run")
+    def test_skip_files_glob_removes_templated_files(self, mock_run, mock_git, tmp_path):
+        state = tmp_path / "state"
+        nested = state / "apps"
+        nested.mkdir(parents=True)
+        app_dev = nested / "my-app-dev.yaml"
+        app_staging = nested / "my-app-staging.yaml"
+        app_dev.write_text("dev")
+        app_staging.write_text("staging")
+
+        mock_run.return_value = MagicMock(returncode=1)
+        assert commit_state(state, "token", "changed", ["apps/my-app-*.yaml"]) is True
+
+        assert not app_dev.exists()
+        assert not app_staging.exists()
+
+    @patch("src.github._run_git")
+    @patch("src.github.subprocess.run")
+    def test_skip_files_glob_removes_templated_directories(
+        self, mock_run, mock_git, tmp_path
+    ):
+        state = tmp_path / "state"
+        app_dev = state / "my-app-dev"
+        app_staging = state / "my-app-staging"
+        app_dev.mkdir(parents=True)
+        app_staging.mkdir(parents=True)
+        (app_dev / "manifest.yaml").write_text("dev")
+        (app_staging / "manifest.yaml").write_text("staging")
+
+        mock_run.return_value = MagicMock(returncode=1)
+        assert commit_state(state, "token", "changed", ["my-app-*"]) is True
+
+        assert not app_dev.exists()
+        assert not app_staging.exists()
+
 
 class TestWriteStepSummary:
     def test_write_to_file(self, tmp_path):

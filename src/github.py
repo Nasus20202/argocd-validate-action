@@ -252,35 +252,55 @@ def _remove_skipped_paths(state_dir: Path, skip_files: list[str]) -> None:
         entry = raw.strip()
         if not entry:
             continue
-        target = (state_root / entry).resolve()
+        # Path.glob supports wildcard patterns, so skip-files can remove
+        # templated outputs (for example, app-*.yaml or app-* directories).
+        matched_paths = list(state_root.glob(entry))
 
-        # Never allow deletion outside state_dir.
-        if not target.is_relative_to(state_root):
-            logger.warning("Skipping unsafe skip-files path outside state-dir: %s", entry)
-            continue
+        matched_count = len(matched_paths)
+        removed_count = 0
+        for matched in matched_paths:
+            target = matched.resolve()
 
-        if target.is_file() or target.is_symlink():
-            try:
-                target.unlink()
-                logger.info("Removed skipped file from state: %s", entry)
-            except FileNotFoundError:
-                logger.info("skip-files entry not found in state-dir: %s", entry)
-            except OSError as exc:
+            # Never allow deletion outside state_dir.
+            if not target.is_relative_to(state_root):
                 logger.warning(
-                    "Failed to remove skipped file from state '%s': %s", entry, exc
+                    "Skipping unsafe skip-files path outside state-dir: %s", entry
                 )
-        elif target.is_dir():
-            try:
-                shutil.rmtree(target)
-                logger.info("Removed skipped directory from state: %s", entry)
-            except FileNotFoundError:
-                logger.info("skip-files entry not found in state-dir: %s", entry)
-            except OSError as exc:
-                logger.warning(
-                    "Failed to remove skipped directory from state '%s': %s", entry, exc
-                )
-        else:
-            logger.info("skip-files entry not found in state-dir: %s", entry)
+                continue
+
+            if target.is_file() or target.is_symlink():
+                try:
+                    target.unlink()
+                    removed_count += 1
+                    logger.info("Removed skipped file from state: %s", target)
+                except FileNotFoundError:
+                    logger.debug("Matched skip-files path disappeared before delete: %s", target)
+                    continue
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to remove skipped file from state '%s': %s",
+                        target,
+                        exc,
+                    )
+            elif target.is_dir():
+                try:
+                    shutil.rmtree(target)
+                    removed_count += 1
+                    logger.info("Removed skipped directory from state: %s", target)
+                except FileNotFoundError:
+                    logger.debug("Matched skip-files path disappeared before delete: %s", target)
+                    continue
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to remove skipped directory from state '%s': %s",
+                        target,
+                        exc,
+                    )
+
+        if matched_count == 0:
+            logger.info("No state-dir paths matched skip-files entry: %s", entry)
+        elif removed_count == 0:
+            logger.info("Matched skip-files entry but removed no state-dir paths: %s", entry)
 
 
 def _run_git(*args: str) -> str:
