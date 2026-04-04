@@ -281,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.state_dir),
             args.github_token,
             diff_summary.status,
+            skip_files,
         )
 
     logger.info("Done!")

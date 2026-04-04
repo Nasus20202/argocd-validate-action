@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -176,6 +177,7 @@ def commit_state(
     state_dir: Path,
     github_token: str,
     diff_status: str = "changed",
+    skip_files: list[str] | None = None,
 ) -> bool:
     """Commit and push the state directory to the repository.
 
@@ -183,6 +185,7 @@ def commit_state(
         state_dir: Path to the state directory
         github_token: GitHub token for push
         diff_status: The diff status ("initialized" or "changed")
+        skip_files: Relative paths in state_dir to remove before commit
 
     Returns:
         True if successful
@@ -203,6 +206,9 @@ def commit_state(
             "user.email",
             "41898282+github-actions[bot]@users.noreply.github.com",
         )
+
+        # Remove skipped files/directories from state directory before staging
+        _remove_skipped_paths(state_dir, skip_files or [])
 
         # Stage state directory
         _run_git("add", str(state_dir))
@@ -237,6 +243,28 @@ def commit_state(
             e,
         )
         return False
+
+
+def _remove_skipped_paths(state_dir: Path, skip_files: list[str]) -> None:
+    """Remove skipped files/directories from state_dir, if present."""
+    state_root = state_dir.resolve()
+    for raw in skip_files:
+        entry = raw.strip()
+        if not entry:
+            continue
+        target = (state_root / entry).resolve()
+
+        # Never allow deletion outside state_dir.
+        if not target.is_relative_to(state_root):
+            logger.warning("Skipping unsafe skip-files path outside state-dir: %s", entry)
+            continue
+
+        if target.is_file() or target.is_symlink():
+            target.unlink(missing_ok=True)
+            logger.info("Removed skipped file from state: %s", entry)
+        elif target.is_dir():
+            shutil.rmtree(target)
+            logger.info("Removed skipped directory from state: %s", entry)
 
 
 def _run_git(*args: str) -> str:
