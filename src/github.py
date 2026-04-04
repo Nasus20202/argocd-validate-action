@@ -260,11 +260,27 @@ def _remove_skipped_paths(state_dir: Path, skip_files: list[str]) -> None:
             continue
 
         if target.is_file() or target.is_symlink():
-            target.unlink(missing_ok=True)
-            logger.info("Removed skipped file from state: %s", entry)
+            try:
+                target.unlink()
+                logger.info("Removed skipped file from state: %s", entry)
+            except FileNotFoundError:
+                logger.info("skip-files entry not found in state-dir: %s", entry)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove skipped file from state '%s': %s", entry, exc
+                )
         elif target.is_dir():
-            shutil.rmtree(target)
-            logger.info("Removed skipped directory from state: %s", entry)
+            try:
+                shutil.rmtree(target)
+                logger.info("Removed skipped directory from state: %s", entry)
+            except FileNotFoundError:
+                logger.info("skip-files entry not found in state-dir: %s", entry)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove skipped directory from state '%s': %s", entry, exc
+                )
+        else:
+            logger.info("skip-files entry not found in state-dir: %s", entry)
 
 
 def _run_git(*args: str) -> str:
