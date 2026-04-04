@@ -193,6 +193,43 @@ class TestCompareManifests:
         assert summary.added_count == 1
         assert summary.removed_count == 1
 
+    def test_skip_files_excluded_from_diff_and_comment(self, tmp_dir):
+        state = tmp_dir / "state"
+        manifests = tmp_dir / "manifests"
+        state.mkdir()
+        manifests.mkdir()
+
+        (state / "keep.yaml").write_text("old")
+        (manifests / "keep.yaml").write_text("new")
+        (manifests / "skip-me.yaml").write_text("added")
+
+        summary = compare_manifests(
+            state,
+            manifests,
+            update_state=False,
+            skip_files=["skip-me.yaml"],
+        )
+        assert summary.status == "changed"
+        assert summary.added_count == 0
+        assert summary.modified_count == 1
+        assert "skip-me.yaml" not in summary.comment_body
+
+    def test_skip_files_excluded_from_state_update(self, tmp_dir):
+        state = tmp_dir / "state"
+        manifests = tmp_dir / "manifests"
+        manifests.mkdir()
+        (manifests / "keep.yaml").write_text("keep")
+        (manifests / "skip-me.yaml").write_text("skip")
+
+        compare_manifests(
+            state,
+            manifests,
+            update_state=True,
+            skip_files=["skip-me.yaml"],
+        )
+        assert (state / "keep.yaml").exists()
+        assert not (state / "skip-me.yaml").exists()
+
 
 class TestValidateStateDirPath:
     def test_safe_path(self, tmp_dir):
