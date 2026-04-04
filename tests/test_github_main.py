@@ -185,6 +185,38 @@ class TestCommitState:
             "commit", "-m", "chore: initialize ArgoCD manifest state"
         )
 
+    @patch("src.github._run_git")
+    @patch("src.github.subprocess.run")
+    def test_skip_files_removed_before_add(self, mock_run, mock_git, tmp_path):
+        state = tmp_path / "state"
+        nested = state / "nested"
+        nested.mkdir(parents=True)
+        file_path = nested / "skip.yaml"
+        file_path.write_text("content")
+
+        # Ensure commit path executes
+        mock_run.return_value = MagicMock(returncode=1)
+        assert commit_state(state, "token", "changed", ["nested/skip.yaml"]) is True
+
+        assert not file_path.exists()
+        add_call_index = mock_git.call_args_list.index(call("add", str(state)))
+        commit_call_index = mock_git.call_args_list.index(
+            call("commit", "-m", "chore: update ArgoCD manifest state")
+        )
+        assert add_call_index < commit_call_index
+
+    @patch("src.github._run_git")
+    @patch("src.github.subprocess.run")
+    def test_skip_files_outside_state_dir_ignored(self, mock_run, mock_git, tmp_path):
+        state = tmp_path / "state"
+        state.mkdir(parents=True)
+        sibling = tmp_path / "outside.yaml"
+        sibling.write_text("outside")
+
+        mock_run.return_value = MagicMock(returncode=1)
+        assert commit_state(state, "token", "changed", ["../outside.yaml"]) is True
+        assert sibling.exists()
+
 
 class TestWriteStepSummary:
     def test_write_to_file(self, tmp_path):
