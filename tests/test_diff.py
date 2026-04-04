@@ -230,6 +230,20 @@ class TestCompareManifests:
         assert (state / "keep.yaml").exists()
         assert not (state / "skip-me.yaml").exists()
 
+    def test_skip_directory_pattern_matches_exact_prefix(self, tmp_dir):
+        state = tmp_dir / "state"
+        manifests = tmp_dir / "manifests"
+        manifests.mkdir()
+        (manifests / "foo").mkdir()
+        (manifests / "foo" / "skip.yaml").write_text("skip")
+        (manifests / "foobar").mkdir()
+        (manifests / "foobar" / "keep.yaml").write_text("keep")
+
+        compare_manifests(state, manifests, update_state=True, skip_files=["foo/"])
+
+        assert not (state / "foo" / "skip.yaml").exists()
+        assert (state / "foobar" / "keep.yaml").exists()
+
 
 class TestValidateStateDirPath:
     def test_safe_path(self, tmp_dir):

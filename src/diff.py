@@ -52,6 +52,11 @@ class DiffSummary:
         )
 
 
+def _normalize_skip_patterns(skip_files: list[str] | None) -> list[str]:
+    """Normalize skip-files by trimming whitespace and dropping empty entries."""
+    return [s.strip() for s in (skip_files or []) if s.strip()]
+
+
 def compare_manifests(
     state_dir: Path,
     manifests_dir: Path,
@@ -77,7 +82,7 @@ def compare_manifests(
     # Validate state directory path
     _validate_state_dir_path(state_dir)
 
-    normalized_skip_files = [s.strip() for s in (skip_files or []) if s.strip()]
+    normalized_skip_files = _normalize_skip_patterns(skip_files)
 
     # If state directory doesn't exist or is empty, initialize it
     if not state_dir.is_dir() or not any(state_dir.iterdir()):
@@ -153,16 +158,18 @@ def _compare_directories(
     state_files = _collect_files(state_dir)
     manifest_files = _collect_files(manifests_dir)
 
-    skip_patterns = [s.strip() for s in (skip_files or []) if s.strip()]
+    skip_patterns = skip_files or []
+    state_skipped = _collect_skipped_file_paths(state_dir, skip_patterns)
+    manifest_skipped = _collect_skipped_file_paths(manifests_dir, skip_patterns)
     state_rel = {
         f.relative_to(state_dir)
         for f in state_files
-        if not _matches_skip_patterns(f.relative_to(state_dir), skip_patterns)
+        if f.relative_to(state_dir) not in state_skipped
     }
     manifest_rel = {
         f.relative_to(manifests_dir)
         for f in manifest_files
-        if not _matches_skip_patterns(f.relative_to(manifests_dir), skip_patterns)
+        if f.relative_to(manifests_dir) not in manifest_skipped
     }
 
     # Added files (in manifests but not in state)
@@ -200,15 +207,16 @@ def _generate_diff_text(
     import subprocess
     import tempfile
 
-    skip_patterns = [s.strip() for s in (skip_files or []) if s.strip()]
     try:
         with tempfile.TemporaryDirectory(prefix="argocd-state-") as filtered_state:
             with tempfile.TemporaryDirectory(prefix="argocd-manifests-") as filtered_manifests:
                 filtered_state_dir = Path(filtered_state)
                 filtered_manifests_dir = Path(filtered_manifests)
 
-                _copy_filtered_tree(state_dir, filtered_state_dir, skip_patterns)
-                _copy_filtered_tree(manifests_dir, filtered_manifests_dir, skip_patterns)
+                _copy_filtered_tree(state_dir, filtered_state_dir, skip_files or [])
+                _copy_filtered_tree(
+                    manifests_dir, filtered_manifests_dir, skip_files or []
+                )
 
                 result = subprocess.run(
                     [
@@ -223,9 +231,15 @@ def _generate_diff_text(
                     timeout=60,
                 )
                 diff_text = result.stdout or ""
-                return diff_text.replace(
-                    str(filtered_state_dir), str(state_dir)
-                ).replace(str(filtered_manifests_dir), str(manifests_dir))
+                if not diff_text:
+                    return ""
+                return _rewrite_diff_headers(
+                    diff_text,
+                    filtered_state_dir,
+                    filtered_manifests_dir,
+                    state_dir,
+                    manifests_dir,
+                )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "(diff command not available)"
 
@@ -298,27 +312,79 @@ def _update_state_dir(
     logger.info("State directory updated with new manifests.")
 
 
-def _matches_skip_patterns(path: Path, skip_patterns: list[str]) -> bool:
-    """Return True if a relative path matches any skip-files pattern."""
-    for pattern in skip_patterns:
-        if path.match(pattern):
-            return True
-        if pattern.endswith("/") and str(path).startswith(pattern):
-            return True
-    return False
-
-
 def _copy_filtered_tree(src_dir: Path, dst_dir: Path, skip_files: list[str]) -> None:
     """Copy files from src_dir into dst_dir while honoring skip-files patterns."""
-    for src in src_dir.rglob("*"):
-        if src.is_dir():
-            continue
+    skipped_paths = _collect_skipped_file_paths(src_dir, skip_files)
+    for src in _collect_files(src_dir):
         rel = src.relative_to(src_dir)
-        if _matches_skip_patterns(rel, skip_files):
+        if rel in skipped_paths:
             continue
         dest = dst_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
+
+
+def _collect_skipped_file_paths(root_dir: Path, skip_patterns: list[str]) -> set[Path]:
+    """Collect skipped relative file paths, including directory-pattern matches like `foo/`."""
+    skipped: set[Path] = set()
+    for pattern in skip_patterns:
+        normalized_pattern = pattern[2:] if pattern.startswith("./") else pattern
+        for matched in root_dir.glob(normalized_pattern):
+            if matched.is_dir():
+                for child in matched.rglob("*"):
+                    if child.is_file():
+                        skipped.add(child.relative_to(root_dir))
+            elif matched.is_file() or matched.is_symlink():
+                try:
+                    skipped.add(matched.relative_to(root_dir))
+                except ValueError:
+                    continue
+    return skipped
+
+
+def _rewrite_diff_headers(
+    diff_text: str,
+    temp_state_dir: Path,
+    temp_manifests_dir: Path,
+    state_dir: Path,
+    manifests_dir: Path,
+) -> str:
+    """Rewrite diff path headers from temporary snapshot paths to real paths."""
+    temp_state = str(temp_state_dir)
+    temp_manifests = str(temp_manifests_dir)
+    actual_state = str(state_dir)
+    actual_manifests = str(manifests_dir)
+
+    rewritten_lines: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("--- "):
+            prefix = f"--- {temp_state}"
+            rewritten_lines.append(
+                f"--- {actual_state}{line[len(prefix):]}"
+                if line.startswith(prefix)
+                else line
+            )
+        elif line.startswith("+++ "):
+            prefix = f"+++ {temp_manifests}"
+            rewritten_lines.append(
+                f"+++ {actual_manifests}{line[len(prefix):]}"
+                if line.startswith(prefix)
+                else line
+            )
+        elif line.startswith("Only in "):
+            state_prefix = f"Only in {temp_state}:"
+            manifests_prefix = f"Only in {temp_manifests}:"
+            if line.startswith(state_prefix):
+                rewritten_lines.append(f"Only in {actual_state}:{line[len(state_prefix):]}")
+            elif line.startswith(manifests_prefix):
+                rewritten_lines.append(
+                    f"Only in {actual_manifests}:{line[len(manifests_prefix):]}"
+                )
+            else:
+                rewritten_lines.append(line)
+        else:
+            rewritten_lines.append(line)
+    return "\n".join(rewritten_lines)
 
 
 def write_github_outputs(summary: DiffSummary, output_file: str | None = None) -> None:
