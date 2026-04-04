@@ -10,7 +10,7 @@ This GitHub Action builds, validates, and compares Kubernetes manifests from Arg
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------- | -------------------------- |
 | `manifests-dir`    | Directory to output generated manifests                                                          | No       | `manifests`                |
 | `apps-dir`         | Directory containing ArgoCD application manifests                                                | Yes      | -                          |
-| `skip-files`       | Comma-separated list of files to skip                                                            | No       | ``                         |
+| `skip-files`       | Comma-separated list of files to skip. These files are excluded from discovery/validation and removed from `state-dir` before commit when `commit-state: "true"` | No       | ``                         |
 | `skip-resources`   | Comma-separated list of Kubernetes resources to skip during validation                           | No       | `CustomResourceDefinition` |
 | `state-dir`        | Directory for storing manifest state for diff comparison. Initialized automatically if empty.    | No       | ``                         |
 | `comment-on-pr`    | Whether to post manifest diff as a PR comment (requires `state-dir` and `github-token`)          | No       | `false`                    |
@@ -78,6 +78,21 @@ jobs:
           state-dir: ".argocd-state"
           commit-state: "true"
           github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Skip Files (comma-separated)
+
+Use `skip-files` to exclude specific files from processing and prevent them from being committed into your manifest state.
+
+```yaml
+- name: Build and validate ArgoCD Manifests
+  uses: nasus20202/argocd-validate-action@v3
+  with:
+    apps-dir: "kubernetes/argocd-apps"
+    state-dir: ".argocd-state"
+    commit-state: "true"
+    skip-files: "argocd-apps/legacy-app.yaml,argocd-apps/tmp/"
+    github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## How It Works
