@@ -243,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.state_dir:
         state_dir = Path(args.state_dir)
         logger.info("Comparing manifests with state in: %s", state_dir)
-        diff_summary = compare_manifests(state_dir, manifests_dir)
+        diff_summary = compare_manifests(state_dir, manifests_dir, skip_files=skip_files)
         write_github_outputs(diff_summary)
 
     # ── Step 7: Post PR comment ──
