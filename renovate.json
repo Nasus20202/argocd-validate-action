@@ -6,31 +6,5 @@
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
     }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^action\\.yaml$/"
-      ],
-      "matchStrings": [
-        "uses: azure/setup-kubectl@[^\\s]+\\s+with:\\s+version: \"(?<currentValue>v.+?)\""
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "kubernetes/kubernetes",
-      "versioningTemplate": "loose"
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^action\\.yaml$/"
-      ],
-      "matchStrings": [
-        "uses: azure/setup-helm@[^\\s]+\\s+with:\\s+version: \"(?<currentValue>v.+?)\""
-      ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "helm/helm",
-      "versioningTemplate": "loose"
-    }
   ]
 }
