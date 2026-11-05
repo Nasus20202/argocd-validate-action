@@ -193,6 +193,38 @@ class TestCompareManifests:
         assert summary.added_count == 1
         assert summary.removed_count == 1
 
+    def test_diff_text_includes_added_and_removed_file_contents(self, tmp_dir):
+        state = tmp_dir / "state"
+        manifests = tmp_dir / "manifests"
+        state.mkdir()
+        manifests.mkdir()
+
+        (state / "deployment.yaml").write_text("replicas: 1\n")
+        (manifests / "deployment.yaml").write_text("replicas: 2\n")
+        (manifests / "migrations-job.yaml").write_text("kind: Job\nname: migrate\n")
+        (state / "old-service.yaml").write_text("kind: Service\nname: legacy\n")
+
+        summary = compare_manifests(state, manifests, update_state=False)
+
+        assert summary.added_files == ["migrations-job.yaml"]
+        assert summary.removed_files == ["old-service.yaml"]
+        assert summary.modified_files == ["deployment.yaml"]
+
+        # Added and removed files must show their full contents, not just
+        # "Only in ..." lines.
+        assert "+kind: Job" in summary.diff_text
+        assert "+name: migrate" in summary.diff_text
+        assert "-kind: Service" in summary.diff_text
+        assert "-name: legacy" in summary.diff_text
+        assert "-replicas: 1" in summary.diff_text
+        assert "+replicas: 2" in summary.diff_text
+
+        # Temporary snapshot paths must not leak into the output.
+        assert "argocd-state-" not in summary.diff_text
+        assert "argocd-manifests-" not in summary.diff_text
+        assert str(state) in summary.diff_text
+        assert str(manifests) in summary.diff_text
+
     def test_skip_files_excluded_from_diff_and_comment(self, tmp_dir):
         state = tmp_dir / "state"
         manifests = tmp_dir / "manifests"

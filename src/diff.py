@@ -223,6 +223,10 @@ def _generate_diff_text(
                         "diff",
                         "-r",
                         "-u",
+                        # Treat files missing on one side as empty so added and
+                        # removed files show their full contents, not just
+                        # "Only in ..." lines.
+                        "-N",
                         str(filtered_state_dir),
                         str(filtered_manifests_dir),
                     ],
@@ -357,7 +361,15 @@ def _rewrite_diff_headers(
 
     rewritten_lines: list[str] = []
     for line in diff_text.splitlines():
-        if line.startswith("--- "):
+        if line.startswith("diff "):
+            # Per-file command line emitted by `diff -r`, e.g.
+            # "diff -r -u -N <tmp_state>/x.yaml <tmp_manifests>/x.yaml"
+            rewritten_lines.append(
+                line.replace(temp_state, actual_state).replace(
+                    temp_manifests, actual_manifests
+                )
+            )
+        elif line.startswith("--- "):
             prefix = f"--- {temp_state}"
             rewritten_lines.append(
                 f"--- {actual_state}{line[len(prefix):]}"
